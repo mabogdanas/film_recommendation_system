@@ -1,1 +1,1 @@
-# ma_data
+#This project was written as the final project of the course Data Analysis and Data Technologies. The first part was the Exploratory Data Analysis, then I consider the content-based recommendation system and the collaborative filtering and lastly I evaluated the systems.
