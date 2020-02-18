@@ -1,0 +1,309 @@
+---
+title: "film recommendation system"
+author: "team 23"
+date: "17 05 2019"
+output: html_document
+---
+```{r echo = FALSE}
+knitr::opts_chunk$set(echo = FALSE, warnings=FALSE, message=FALSE)
+```
+
+```{r libraries}
+library(readr)
+library(tidytext)
+library(ggplot2)
+library(ggraph)
+library(igraph)
+library(wordcloud2)
+library(RColorBrewer)
+library(tidyr)
+library(stringr)
+library(dplyr)
+library(stopwords)
+library(tidyverse)
+library(recommenderlab)
+library(tnet)
+library(textstem)
+library(gridExtra)
+```
+```{r message = F}
+movies <- read_csv("~/shared/minor2_2018/data/movies_cut.csv")
+ratings <- read_csv("~/shared/minor2_2018/data/ratings_cut.csv")
+ratings = ratings %>% dplyr::select(-X1)
+```
+
+```{r}
+movie_metadata <- read_csv("~/ma_projects/movie_metadata.csv") 
+meta_2 <- read_csv2("~/ma_projects/meta_2.csv") 
+meta_2 = distinct(meta_2, movie_id, .keep_all = TRUE) 
+movies_with_meta = inner_join(movies, meta_2, by = "movie_id")
+mov = movies_with_meta
+```
+## Сontent-based method
+
+```{r}
+movies_with_meta1 = movies_with_meta %>% dplyr::select(title.x, movie_id, genres.x, director_name, content_rating, actor_1_name, actor_2_name, actor_3_name, imdb_score, country)
+```
+
+
+Преобразуем наши данные в широкий формат.
+```{r}
+library(tidyr)
+source("~/shared/minor2_2018/2-tm-net/extract_json.R") 
+source("~/ma_projects/extract_smth.R") 
+movies_with_meta1 = extract_json(df = movies_with_meta1, col = "genres.x")
+mov1 = movies_with_meta1 %>% dplyr::select(-title.x, -genres.x) %>% na.omit()
+mov2 = extract_smth(df = mov1, col = "content_rating")
+mov3 = extract_smth(df = mov2, col = "director_name")
+mov4 = extract_smth(df = mov3, col = "actor_1_name")
+mov5 = extract_smth(df = mov4, col = "actor_2_name")
+mov6 = extract_smth(df = mov5, col = "actor_3_name")
+mov7 = extract_smth(df = mov1, col = "country")
+```
+
+```{r}
+mov7 = mov7 %>% dplyr::select(-director_name, -content_rating, -actor_1_name, -actor_2_name, -actor_3_name, -imdb_score, -Drama, -"Science Fiction", -Thriller, -Comedy, -Romance, -Documentary, -Horror, -History, -Action, -Western, -Music, -Crime, -Family, -Adventure, -Mystery, -Fantasy, -Foreign, -War, -Animation)
+movi = inner_join(mov6, mov7, by = "movie_id")
+
+movi = movi %>% dplyr::select(-country)
+```
+
+Считаем матрицу схожести фильмов
+
+```{r}
+rownames(movi) = movi$movie_id
+movi = movi %>% dplyr::select(-movie_id)
+sim = lsa::cosine(t(as.matrix(movi)))
+diag(sim) = 0
+```
+
+
+## Рекомендация
+Например, возьмем пользователя 2413408. Он оценил несколько фильмов на 5.
+
+```{r}
+userId = 2413408
+user = ratings %>% filter(customer_id == userId & rating == 5)
+user$movie_id
+```
+
+```{r}
+movies_with_meta1 %>% 
+  filter(movie_id %in% c("607", "1073", "1905", "2152", "2913", "3860", "3938", "4306", "3825")) %>% 
+  select(title.x, director_name, country, imdb_score) %>% 
+  knitr::kable()
+```
+
+На основе этих фильмов мы порекомендуем ему наиболее похожие.
+
+```{r}
+mostSimilar = head(sort(sim[,as.character(user$movie_id)], decreasing = T), n = 10)
+a = which(sim[,as.character(user$movie_id)] == mostSimilar, arr.ind = TRUE)
+a
+```
+
+Коэффициенты схожести:
+```{r}
+mostSimilar
+```
+
+Рекомендуемые фильмы:
+```{r}
+a = which(sim[,as.character(user$movie_id)] %in% mostSimilar, arr.ind = TRUE)
+rows = a %% dim(sim)[1] 
+result = rownames(sim)[rows]
+filter(movies_with_meta1, movie_id %in% result) %>% dplyr::select(title.x, movie_id, director_name, country, imdb_score) %>% knitr::kable()
+```
+
+
+Теперь напишем рекомендательную систему в виде функции с аргументами userId и количество фильмов в результате.
+```{r}
+recFilms_n = function(userId, num){
+  user = ratings %>% filter(customer_id == userId & rating == 5)
+  
+  if (length(user)==0) {
+    recommend = "The Avengers"
+  } else {
+    mostSimilar = head(sort(sim[,as.character(user$movie_id)], decreasing = T), n = num)
+    a = which(sim[,as.character(user$movie_id)] %in% mostSimilar, arr.ind = TRUE)
+    rows = a %% dim(sim)[1]
+    result = rownames(sim)[rows]
+    recommend = filter(movies_with_meta1, movie_id %in% result) %>% dplyr::select(title.x, movie_id, director_name, country, imdb_score) %>% knitr::kable()
+  }
+  
+  recommend
+}
+
+recFilms_n(2413408, 10)
+
+```
+### Collaborative filtering
+
+```{r message=FALSE, warning=FALSE}
+library(devtools)
+library(knitr)
+library(recommenderlab)
+library(kableExtra)
+ 
+ratings <- ratings %>% select(-title)
+
+ratings_full = inner_join(movies, ratings, by = "movie_id")
+```
+ 
+ 
+В первую очередь построим рекоммендательную систему на основе оценки фильмов пользователями, то есть по модели IBCF ("Recommender based on item-based collaborative filtering (real data)")
+ 
+```{r}
+rates = select(ratings_full, customer_id, movie_id, rating)
+```
+ 
+Перейдем к "широкому" формату данных
+ 
+```{r}
+rates = spread(rates, key = movie_id, value = rating)
+```
+ 
+```{r}
+rates = select(rates, -customer_id)
+```
+ 
+Преобразуем данные с помощью пакета `recommenderlab`
+ 
+```{r}
+rates = as.matrix(rates)
+r = as(rates, "realRatingMatrix")
+r
+```
+ 
+### Меры схожести
+ 
+Оценки, выставленные отдельно взятым пользователем, представляют собой вектор в M-мерном пространстве фильмов, а сравнивать вектора мы умеем. Среди возможных мер можно выделить следующие:
+ 
+*Косинусная мера
+*Коэффициент корреляции Пирсона
+*Евклидово расстояние
+*Коэффициент Танимото
+*Манхэттенское расстояние и т.д.
+ 
+Пока же достаточно сказать, что в рекомендательных системах наиболее часто используются:
+ 
+* Коэффициент Пирсона;
+* Косинусное расстояние;
+* Евклидово расстояние.
+ 
+Рассмотрим более подробно косинусную меру, которую мы и собираемся реализовать. Косинусная мера для двух векторов — это косинус угла между ними.
+ 
+ 
+```{r}
+similarity_users10 <- similarity(r[1:10, ], method = "cosine", which = "user")
+as.matrix(similarity_users10)
+```
+ 
+Проиллюстрируем полученные результаты
+ 
+```{r}
+image(as.matrix(similarity_users10), main = "User similarity")
+```
+ 
+### Метод коллаборативной фильтрации
+ 
+####Подготовка данных
+ 
+Для начала подготовим данные к работе, а именно уберем несоответствующие 
+ 
+```{r}
+ggplot(data = data.frame(filmRate=colCounts(r))) + geom_histogram(aes(x=filmRate), fill = "#87b1b6") +
+xlab("Количество оценок") +
+  ylab("Рейтинг Фильма") +
+  ggtitle("Данные для анализа")+
+  theme_bw() 
+ 
+ggplot(data = data.frame(userRate=rowCounts(r))) + geom_histogram(aes(x=userRate), fill = "#87b1b6")+
+  xlab("Рейтинг Фильма") +
+  ylab("Количество оценок") +
+  ggtitle("Данные для анализа")+
+  theme_bw() 
+```
+ 
+Отберем только строки и столбцы с нужным количеством оценок
+ 
+```{r}
+ 
+ratings_movies <- r[rowCounts(r) > 5, colCounts(r) > 10] 
+ratings_movies
+```
+У нас осталось довольно большая матрица 25000 x 524 с общим числом значений 901263
+ 
+Рассмотрим распределение средних оценок пользователя
+ 
+```{r}
+average_ratings_per_user = rowMeans(ratings_movies)
+ggplot()+geom_histogram(aes(x=average_ratings_per_user), fill = "#87b1b6") +
+  geom_vline(aes(xintercept=mean(average_ratings_per_user)), color="pink", linetype="dashed", size=1) +
+ggtitle("Распределение средних оценок пользователей")+
+  xlab("Оценка") +
+  ylab("Количество пользователей") +
+  theme_bw()
+```
+ 
+### Метод коллаборативной фильтрации включает в себя следующие шаги:
+ 
+* вычислить похожесть всех пар фильмов
+* для каждого фильма найти k наиболее похожих
+* для каждого пользователя определить фильмы, наиболее близкие к тем, которые он оценил
+ 
+Разделим данные на тестовую и обучающую выборки. На обучающей построим модель, для пользователей из тестовой будем рекомендовать фильмы.
+ 
+```{r}
+set.seed(100)
+test_ind <- sample(1:nrow(ratings_movies), size = nrow(ratings_movies)*0.2)
+recc_data_train <- ratings_movies[-test_ind, ]
+recc_data_test <- ratings_movies[test_ind, ]
+```
+ 
+##Построим рекомендательную модель
+ 
+```{r}
+recc_model <- Recommender(data = recc_data_train, method = "IBCF", parameter = list(k = 30))
+recc_model
+```
+ Построим матрицу схожести с помощью метода getModel() для более детального понимания модели
+ 
+```{r}
+model_details <- getModel(recc_model)
+model_details$description
+model_details$sim[1:10, 1:10]
+```
+ 
+#### Составим рекомендации
+ 
+```{r}
+recc_predicted <- predict(object = recc_model, newdata = recc_data_test, n = 6)
+recc_predicted
+```
+ 
+Результат:
+ 
+```{r}
+str(recc_predicted)
+```
+ 
+ 
+```{r}
+recc_user_1 <- recc_predicted@items[[1]]
+recc_user_1
+ 
+movies_user_1 <- recc_predicted@itemLabels[recc_user_1]
+movies_user_1
+ 
+names_movies_user_1 <- ratings_full$title[match(movies_user_1, ratings_full$movie_id)]
+names_movies_user_1
+```
+ 
+Посмотрим на предсказанные рейтинги для отдельно взятого пользователя (id=2):
+ 
+```{r}
+recc_predicted@ratings[[2]]
+```
+ 
+   Так, мы можем понять, что данный пользователь скорее всего заинтересуется в просмотре данных фильмов, так как предсказанные рейтинги достаточно высокие, поэтому мы можем точно ему рекомендовать эти фильмы к просмотру. 
