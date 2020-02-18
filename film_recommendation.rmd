@@ -1,8 +1,17 @@
 ---
-title: "film recommendation system"
-author: "team 23"
-date: "17 05 2019"
-output: html_document
+title: "Rec_sys"
+author: "team23"
+logo: "logo_gallery.png"
+output: 
+  html_document: 
+    code_folding: show
+    theme: cosmo
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+editor_options: 
+  chunk_output_type: console
 ---
 ```{r echo = FALSE}
 knitr::opts_chunk$set(echo = FALSE, warnings=FALSE, message=FALSE)
@@ -25,7 +34,9 @@ library(recommenderlab)
 library(tnet)
 library(textstem)
 library(gridExtra)
+
 ```
+
 ```{r message = F}
 movies <- read_csv("~/shared/minor2_2018/data/movies_cut.csv")
 ratings <- read_csv("~/shared/minor2_2018/data/ratings_cut.csv")
@@ -33,13 +44,530 @@ ratings = ratings %>% dplyr::select(-X1)
 ```
 
 ```{r}
-movie_metadata <- read_csv("~/ma_projects/movie_metadata.csv") 
-meta_2 <- read_csv2("~/ma_projects/meta_2.csv") 
+movie_metadata <- read_csv("~/shared/minor2_2018_23/movie_metadata.csv") 
+meta_2 <- read_csv2("~/shared/minor2_2018_23/meta_2.csv") 
 meta_2 = distinct(meta_2, movie_id, .keep_all = TRUE) 
 movies_with_meta = inner_join(movies, meta_2, by = "movie_id")
 mov = movies_with_meta
 ```
-## Сontent-based method
+
+
+
+# Exploratory Data Analyses
+ 
+На данном этапе мы нашли дополнительные данные, которые пригодятся нам для дальнейшего анализа и соединили их с нашим изначальным датасетом. Также подгружаем уже известный нам датасет с рейтингами.
+
+В нашем новом датасете появляются такие интересные переменные, как **возрастные ограничения** фильмов, **режиссеры** для каждого фильма и его ключевые **актеры**. 
+ 
+Вопросы для Exploratory Data Analyses для нового датасета:
++ Фильмы каких режиссеров имеют наиболее высокую оценку среди пользователей Netflix?
++ К каким возрастным рейтингам относятся самые популярные фильмы?
++ Какие возрастные ограничения наиболее часто встречаются среди популярных фильмов?
+ 
+ 
+## Вопрос 1
+**Фильмы каких режиссеров имеют наиболее высокую оценку среди пользователей Netflix?**
+ 
+Если пользователю нравятся довольно популярные режиссеры, которые имеют за свои фильмы высокие оценки среди пользователей, то мы можем порекомендовать ему также фильмы и других популярных режиссеров, так как, вероятно, ему подходят именно они.
+ 
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+  
+## Ход работы:
+ 
+ 
+## 1. Фильтруем данные, необходимые для работы
+ 
+mov_director = select(mov, movie_id, title.x, director_name)
+mov_rat = select(ratings, movie_id, rating)
+mov_d = full_join(x = mov_director, y = mov_rat, by = "movie_id")
+ 
+## 2. Находим наиболее высоко оцененные
+ 
+top1 = mov_d %>%
+group_by(director_name) %>%
+summarise(mean_rating = mean(rating))
+ 
+## 3. Для каждого режиссера находим количество фильмов, выпущенных им/ей
+ 
+top2 = mov_director %>%
+group_by(director_name) %>%
+summarise(count_of_f = n()) %>%
+ungroup()
+ 
+## 4. Объединяем таблицы в один датасет
+ 
+topdirector = left_join(top1, top2, by = "director_name")
+ 
+## 5. Если мы будем брать данные в том виде, который у нас сейчас, то у нас может случиться скос в сторону не самых популярных режиссеров, так как может быть такое, что один режиссер выпустил один удачный фильм, получивший высокую оценку, и больше фильмов не выпускал, и при этом попал в наш топ. Однако этого недостаточно, чтобы быть популярным режиссером. Этого скоса мы хотим избежать, поэтому мы берем только тех режиссеров, которые выпустили больше, чем 5 фильмов.
+ 
+topdirector = filter(topdirector, count_of_f > 2)
+ 
+## 6. Таким образом в датасете остается определенное количество режиссеров, которые активно занимаются выпуском фильмов в прокат, то есть, довольно продуктивные и известные. Отсортировываем среди них по среднему от отзывов пользователей.
+ 
+topdirector = arrange(topdirector, desc(mean_rating))
+top_graph = head(topdirector, 10)
+ 
+## 7. Создаем график на основе результатов, полученных нами и ранжируем колонки от наибольшей средней оценки к наименьшей
+ 
+top_graph = transform(top_graph, director_name = reorder(director_name, mean_rating))
+ 
+ggplot() +
+  geom_bar(data = top_graph, aes(x = director_name, y = mean_rating), stat = "identity", col = "black", fill = "#BC8F8F") +
+  ggtitle("Топ 10 режиссеров по среднему рейтингу их фильмов") +
+  xlab("Режиссеры") +
+  ylab("Средняя оценка (по шкале от 0 до 5)") +
+  coord_flip() +
+  theme_bw()
+ 
+```
+
+## Дополнительнй вопрос                                                                           **Связан ли рейтинг фильма на imdb и страна-производитель?
+
+```{r}
+kino = movies_with_meta %>% 
+  select(imdb_score, country)
+
+shapiro.test(kino$imdb_score)
+
+chisq.test(kino$country, kino$imdb_score)
+```
+Так как тест Шапиро-Уилка показал, что наши данные распределены не по нормальному закону, а одна из переменных качественная, для выявления зависимости был выбран тест Пирсона. Исходя из того что  p-value очень мал, мы отвергаем гипотезу о независимости этих переменных, следовательно, страна производства может повлиять на оценку пользователя. 
+ 
+## Вопрос 2
+ 
+**К каким возрастным рейтингам относятся самые популярные фильмы?**
+ 
+Опишем то, как выглядят наиболее популярные фильмы. Например то, к каким категориям возрастного ограничения относится топ-10 среди наиболее высоко оцененных фильмов и посмотрим, какова возрастная направленность самых массовых и всем полюбившихся фильмов
+ 
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+ 
+## Ход работы:
+ 
+## 1. Фильтруем необходимые нам данные, создаем обую таблицу с фильмами и рейтингами
+ 
+mov_cont = select(mov, movie_id, title.x, content_rating)
+mov_rat = select(ratings, movie_id, rating)
+mov_c = full_join(x = mov_cont, y = mov_rat, by = "movie_id")
+ 
+## 2. Находим средний рейтинг по отзывам пользователей для каждого фильма
+ 
+mov_content = mov_c %>%
+group_by(title.x) %>%
+summarise(mean_rating = mean(rating)) %>%
+filter(!is.na(mean_rating))
+ 
+## 3. Сортируем от большего к меньшему и выделяем 10 наиболее популярных
+ 
+mov_content1 = arrange(mov_content, desc(mean_rating))
+mov_content1 = head(mov_content1, n = 10)
+ 
+mov_content1 <- transform(mov_content1, title = reorder(title.x, mean_rating))
+ 
+## 4. Для наглядности построим график, в котором отобразим наиболее популярные фильмы
+ 
+ggplot() +
+  geom_bar(data = mov_content1, aes(x = title, y = mean_rating), stat = "identity", col = "black", fill = "#BC8F8F") +
+  ggtitle("Топ 10 фильмов по среднему рейтингу") +
+  xlab("Фильмы") +
+  ylab("Средняя оценка (по шкале от 0 до 5)") +
+  coord_flip() +
+  theme_bw()
+ 
+```
+
+
+На графике представлено 10 фильмов с наиболее высокой оценкой. 
+Теперь к этим данным привлечем данные из нового датасета, к которым относятся возрастные ограничения. 
+
+ 
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+## 5. Создадим таблицу с рейтингами топ-10 фильмов
+ 
+Rating <- c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10")
+ 
+Name <- c("Robin Hood", "Rebecca", "Spaced Invaders", "The Great Gatsby", "Fun with Dick and Jane", "Extreme Measures", "The Sentinel", "Hoop Dreams", "The Sixth Sense", "Sense and Sensibility")
+ 
+Content <- c("PG-13", "Not Rated", "PG", "PG-13", "PG-13", "R", "PG-13", "PG-13", "PG-13", "	PG")
+ 
+table_content <- data.frame(Rating)
+table_content <- cbind(Rating, Name, Content)
+knitr::kable(table_content, caption = 'Возрастные ограничения самых популярных фильмов')
+```
+ 
+## Возраст 3
+ 
+**Какие возрастные ограничения наиболее часто встречаются среди популярных фильмов?**
+ 
+Теперь сформулируем вопрос несколько иначе. С помощью результатов данного анализа, мы поймем, фильмы с какими возрастными ограничениями имеют наибольший успех среди пользователей. Если наш пользователь предпочитает более популярные фильмы, то он, скорее всего, будет обращать внимание на самое распространненное возрастное ограничение. То есть для среднестатистического пользователя, вкусы которого совпадают со вкусами большинства пользователей сайта, мы будем предлагать фильмы именно с таким рейтингом.
+По предыдущему графику видно, что у топ-10 фильмов довольно небольшое отличие в среднем рейтинге. Кроме того, 10 наблюдений - это довольно мало для дальнейшего анализа, поэтому расширим выборку для 50 наиболее популярных фильмов.
+ 
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+ 
+## Ход работы:
+ 
+## 1. Расширяем выборку до 50 наблюдений
+ 
+mov_content1 = mov_content
+mov_content2 = arrange(mov_content, desc(mean_rating))
+mov_content2 = head(mov_content2, n = 50)
+ 
+## 2. Добавляем к нашей таблице с уже выбранными фильмами еще одну переменную - возрастные ограничения
+ 
+content = select(mov, title.x, content_rating)
+content1 = left_join(x = mov_content2, y = content, by = "title.x")
+ 
+## 3. Теперь находим, сколько фильмов относится к каждому из возрастных ограничений среди данной выборки и визуализируем это с помощью графика
+ 
+content2 = content1 %>%
+group_by(content_rating) %>%
+summarise(count_of_r = n()) %>%
+ungroup()
+ 
+ggplot() +
+  geom_bar(data = content2, aes(x = content_rating, y = count_of_r), stat = "identity", col = "black", fill = "#BC8F8F") +
+  ggtitle("Возрастные ограничения в самых популярных фильмах") +
+  xlab("Возрастное ограничение") +
+  ylab("Количество популярных фильмов") +
+  theme_bw()
+```
+ 
+Таким образом, можно отметить, что наиболее распространенным возрастным ограничением среди популярных фильмов является PG-13, то есть фильмы, просмотр которых не желателен детям до 13 лет. Интересно, что среди популярных фильмов есть все виды возрастных ограничений кроме NC-17, к которому относятся фильмы, к которым лица 17-летнего возраста и младше не допускаются
+ 
+
+ 
+ 
+## Анализ биграмм
+Мы получили сеточку биграмм описания фильмов.
+
+
+```{r overview tm}
+# чтобы проанализировать по биграммам описания фильмов, выберем лишь id и overview фильмов
+tm_mov = select(movies_with_meta, movie_id, overview)
+ 
+# подгрузим стоп-слова
+engstopwords = data.frame(words=c(stopwords::stopwords("english")), stringsAsFactors=FALSE)
+ 
+# разобьём на биграммы
+# сначала пусть у нас будет просто столбец с двумя словами
+tm_mov.bigrams = tm_mov %>% 
+  unnest_tokens(bigram, overview, token = "ngrams", n = 2)
+ 
+# вспомогательное вычисление
+tm_mov.bigrams %>% 
+  dplyr::count(bigram, sort = TRUE)
+ 
+# разбиваем на два столбца, избавляемся от стоп-слов
+tm_mov.bifiltered = tm_mov.bigrams %>% 
+  separate(bigram, c("word1", "word2"), sep = " ") %>% 
+  dplyr::filter(!word1 %in% engstopwords$words) %>% 
+  dplyr::filter(!word2 %in% engstopwords$words)
+ 
+# лемматизируем слова
+tm_mov.bifiltered$word1 = textstem::lemmatize_words(tm_mov.bifiltered$word1)
+tm_mov.bifiltered$word2 = textstem::lemmatize_words(tm_mov.bifiltered$word2)  
+ 
+bigrams_counts = tm_mov.bifiltered %>% 
+  dplyr::count(word1, word2, sort = TRUE)
+# закончили разбивать на биграммы
+ 
+# работаем дальше с объектом igraph
+bigram_graph <- bigrams_counts %>% filter(n > 2) %>% 
+  graph_from_data_frame()
+ 
+# считаем degree
+V(bigram_graph)$degree = degree(bigram_graph, mode = 'total')
+ 
+# удаляем вершины со степенями меньше 2. Это число можно выбрать подборам, смотря, насколько адекватно выглядит сеточка
+bigram_graph=delete_vertices(bigram_graph,V(bigram_graph)$degree < 2)
+ 
+# строим примитивный график
+ggraph(bigram_graph, layout = "fr") +
+  geom_edge_link() +
+  geom_node_point() +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1)
+```
+
+Анализ описаний фильмов по биграммам в рамках рекомендательной системы не нужен, так как значительного улучшения не принесет.
+
+## Построение сетей по актёрам
+ 
+```{r actors1}
+# хотим посмотреть на актёров во всех фильмах и построить по ним сеточку
+# делаем датафрейм актёров
+actors = c(movies_with_meta$actor_1_name, movies_with_meta$actor_2_name, movies_with_meta$actor_3_name)
+actors = as.data.frame(actors)
+# удалим NA
+actors = na.omit(actors)
+ 
+# оставляем только тех актёров, которые есть в трёх и более фильмах
+actors = actors %>% 
+  group_by(actors) %>% 
+  summarise(n = n()) %>% 
+  filter(n > 3) %>% 
+  select(actors)
+# из факторной переменой сделаем строковую
+actors$actors = as.character(actors$actors)
+ 
+# соединим топ-3 актёров из фильма в одну ячейку всех актёров фильмов через разделитель _
+actors_df = movies_with_meta %>% 
+  select(movie_id, actor_1_name, actor_2_name, actor_3_name) %>% 
+  mutate(all_actors = str_c(actor_1_name, actor_2_name, actor_3_name, sep = "_"))
+ 
+# уберём все пробелы из всех столбцов
+actors_df$actor_1_name = str_replace_all(actors_df$actor_1_name, " ", "")
+actors_df$actor_2_name = str_replace_all(actors_df$actor_2_name, " ", "")
+actors_df$actor_3_name = str_replace_all(actors_df$actor_3_name, " ", "")
+actors_df$all_actors = str_replace_all(actors_df$all_actors, " ", "")
+# уберём пробелы из вектора наших 40 актёров, которые есть в 3 и более фильмах
+actors$actors = str_replace_all(actors$actors, " ", "")
+```
+ 
+Добавляем столбцы актёров со значениями true/false, есть ли он в этом фильме
+```{r add_columns_with_actors}
+actors_df = actors_df %>% 
+  mutate(AlfreWoodard = str_detect(all_actors, "AlfreWoodard")) %>%
+mutate(AngelinaJoliePitt = str_detect(all_actors, "AngelinaJoliePitt")) %>%
+mutate(AnjelicaHuston = str_detect(all_actors, "AnjelicaHuston")) %>%
+mutate(BillCobbs = str_detect(all_actors, "BillCobbs")) %>%
+mutate(BillMurray = str_detect(all_actors, "BillMurray")) %>%
+mutate(BrendanFraser = str_detect(all_actors, "BrendanFraser")) %>%
+mutate(BruceWillis = str_detect(all_actors, "BruceWillis")) %>%
+mutate(ChristianBale = str_detect(all_actors, "ChristianBale")) %>%
+mutate(ColinFirth = str_detect(all_actors, "ColinFirth")) %>%
+mutate(DemiMoore = str_detect(all_actors, "DemiMoore")) %>%
+mutate(DenzelWashington = str_detect(all_actors, "DenzelWashington")) %>%
+mutate(DwayneJohnson = str_detect(all_actors, "DwayneJohnson")) %>%
+mutate(GaryOldman = str_detect(all_actors, "GaryOldman")) %>%
+mutate(JaneaneGarofalo = str_detect(all_actors, "JaneaneGarofalo")) %>%
+mutate(JasonFlemyng = str_detect(all_actors, "JasonFlemyng")) %>%
+mutate(JeffBridges = str_detect(all_actors, "JeffBridges")) %>%
+mutate(JimBroadbent = str_detect(all_actors, "JimBroadbent")) %>%
+mutate(JohnnyDepp = str_detect(all_actors, "JohnnyDepp")) %>%
+mutate(JudyGreer = str_detect(all_actors, "JudyGreer")) %>%
+mutate(JuliaRoberts = str_detect(all_actors, "JuliaRoberts")) %>%
+mutate(KateWinslet = str_detect(all_actors, "KateWinslet")) %>%
+mutate(KeanuReeves = str_detect(all_actors, "KeanuReeves")) %>%
+mutate(KieranCulkin = str_detect(all_actors, "KieranCulkin")) %>%
+mutate(KristinScottThomas = str_detect(all_actors, "KristinScottThomas")) %>%
+mutate(LiamNeeson = str_detect(all_actors, "LiamNeeson")) %>%
+mutate(MattDamon = str_detect(all_actors, "MattDamon")) %>%
+mutate(MekhiPhifer = str_detect(all_actors, "MekhiPhifer")) %>%
+mutate(MerylStreep = str_detect(all_actors, "MerylStreep")) %>%
+mutate(MorganFreeman = str_detect(all_actors, "MorganFreeman")) %>%
+mutate(OliverPlatt = str_detect(all_actors, "OliverPlatt")) %>%
+mutate(PhilipSeymourHoffman = str_detect(all_actors, "PhilipSeymourHoffman")) %>%
+mutate(RipTorn = str_detect(all_actors, "RipTorn")) %>%
+mutate(RobertDowneyJr. = str_detect(all_actors, "RobertDowneyJr.")) %>%
+mutate(RobertDuvall = str_detect(all_actors, "RobertDuvall")) %>%
+mutate(RosarioDawson = str_detect(all_actors, "RosarioDawson")) %>%
+mutate(SteveBuscemi = str_detect(all_actors, "SteveBuscemi")) %>%
+mutate(TomWilkinson = str_detect(all_actors, "TomWilkinson")) %>%
+mutate(TonyGoldwyn = str_detect(all_actors, "TonyGoldwyn")) %>%
+mutate(WilliamHurt = str_detect(all_actors, "WilliamHurt")) %>%
+mutate(ZooeyDeschanel = str_detect(all_actors, "ZooeyDeschanel")) 
+```
+ 
+Заменим true на единицу, а false на ноль
+```{r change_with_numbers}
+# заменим все TRUE на 1
+actors_df$AlfreWoodard = str_replace_all(actors_df$AlfreWoodard, "TRUE", "1")
+actors_df$AngelinaJoliePitt = str_replace_all(actors_df$AngelinaJoliePitt, "TRUE", "1")
+actors_df$AnjelicaHuston = str_replace_all(actors_df$AnjelicaHuston, "TRUE", "1")
+actors_df$BillCobbs = str_replace_all(actors_df$BillCobbs, "TRUE", "1")
+actors_df$BillMurray = str_replace_all(actors_df$BillMurray, "TRUE", "1")
+actors_df$BrendanFraser = str_replace_all(actors_df$BrendanFraser, "TRUE", "1")
+actors_df$BruceWillis = str_replace_all(actors_df$BruceWillis, "TRUE", "1")
+actors_df$ChristianBale = str_replace_all(actors_df$ChristianBale, "TRUE", "1")
+actors_df$ColinFirth = str_replace_all(actors_df$ColinFirth, "TRUE", "1")
+actors_df$DemiMoore = str_replace_all(actors_df$DemiMoore, "TRUE", "1")
+actors_df$DenzelWashington = str_replace_all(actors_df$DenzelWashington, "TRUE", "1")
+actors_df$DwayneJohnson = str_replace_all(actors_df$DwayneJohnson, "TRUE", "1")
+actors_df$GaryOldman = str_replace_all(actors_df$GaryOldman, "TRUE", "1")
+actors_df$JaneaneGarofalo = str_replace_all(actors_df$JaneaneGarofalo, "TRUE", "1")
+actors_df$JasonFlemyng = str_replace_all(actors_df$JasonFlemyng, "TRUE", "1")
+actors_df$JeffBridges = str_replace_all(actors_df$JeffBridges, "TRUE", "1")
+actors_df$JimBroadbent = str_replace_all(actors_df$JimBroadbent, "TRUE", "1")
+actors_df$JohnnyDepp = str_replace_all(actors_df$JohnnyDepp, "TRUE", "1")
+actors_df$JudyGreer = str_replace_all(actors_df$JudyGreer, "TRUE", "1")
+actors_df$JuliaRoberts = str_replace_all(actors_df$JuliaRoberts, "TRUE", "1")
+actors_df$KateWinslet = str_replace_all(actors_df$KateWinslet, "TRUE", "1")
+actors_df$KeanuReeves = str_replace_all(actors_df$KeanuReeves, "TRUE", "1")
+actors_df$KieranCulkin = str_replace_all(actors_df$KieranCulkin, "TRUE", "1")
+actors_df$KristinScottThomas = str_replace_all(actors_df$KristinScottThomas, "TRUE", "1")
+actors_df$LiamNeeson = str_replace_all(actors_df$LiamNeeson, "TRUE", "1")
+actors_df$MattDamon = str_replace_all(actors_df$MattDamon, "TRUE", "1")
+actors_df$MekhiPhifer = str_replace_all(actors_df$MekhiPhifer, "TRUE", "1")
+actors_df$MerylStreep = str_replace_all(actors_df$MerylStreep, "TRUE", "1")
+actors_df$MorganFreeman = str_replace_all(actors_df$MorganFreeman, "TRUE", "1")
+actors_df$OliverPlatt = str_replace_all(actors_df$OliverPlatt, "TRUE", "1")
+actors_df$PhilipSeymourHoffman = str_replace_all(actors_df$PhilipSeymourHoffman, "TRUE", "1")
+actors_df$RipTorn = str_replace_all(actors_df$RipTorn, "TRUE", "1")
+actors_df$RobertDowneyJr. = str_replace_all(actors_df$RobertDowneyJr., "TRUE", "1")
+actors_df$RobertDuvall = str_replace_all(actors_df$RobertDuvall, "TRUE", "1")
+actors_df$RosarioDawson = str_replace_all(actors_df$RosarioDawson, "TRUE", "1")
+actors_df$SteveBuscemi = str_replace_all(actors_df$SteveBuscemi, "TRUE", "1")
+actors_df$TomWilkinson = str_replace_all(actors_df$TomWilkinson, "TRUE", "1")
+actors_df$TonyGoldwyn = str_replace_all(actors_df$TonyGoldwyn, "TRUE", "1")
+actors_df$WilliamHurt = str_replace_all(actors_df$WilliamHurt, "TRUE", "1")
+actors_df$ZooeyDeschanel = str_replace_all(actors_df$ZooeyDeschanel, "TRUE", "1")
+ 
+# заменим все FALSE на нули
+actors_df$AlfreWoodard = str_replace_all(actors_df$AlfreWoodard, "FALSE", "0")
+actors_df$AngelinaJoliePitt = str_replace_all(actors_df$AngelinaJoliePitt, "FALSE", "0")
+actors_df$AnjelicaHuston = str_replace_all(actors_df$AnjelicaHuston, "FALSE", "0")
+actors_df$BillCobbs = str_replace_all(actors_df$BillCobbs, "FALSE", "0")
+actors_df$BillMurray = str_replace_all(actors_df$BillMurray, "FALSE", "0")
+actors_df$BrendanFraser = str_replace_all(actors_df$BrendanFraser, "FALSE", "0")
+actors_df$BruceWillis = str_replace_all(actors_df$BruceWillis, "FALSE", "0")
+actors_df$ChristianBale = str_replace_all(actors_df$ChristianBale, "FALSE", "0")
+actors_df$ColinFirth = str_replace_all(actors_df$ColinFirth, "FALSE", "0")
+actors_df$DemiMoore = str_replace_all(actors_df$DemiMoore, "FALSE", "0")
+actors_df$DenzelWashington = str_replace_all(actors_df$DenzelWashington, "FALSE", "0")
+actors_df$DwayneJohnson = str_replace_all(actors_df$DwayneJohnson, "FALSE", "0")
+actors_df$GaryOldman = str_replace_all(actors_df$GaryOldman, "FALSE", "0")
+actors_df$JaneaneGarofalo = str_replace_all(actors_df$JaneaneGarofalo, "FALSE", "0")
+actors_df$JasonFlemyng = str_replace_all(actors_df$JasonFlemyng, "FALSE", "0")
+actors_df$JeffBridges = str_replace_all(actors_df$JeffBridges, "FALSE", "0")
+actors_df$JimBroadbent = str_replace_all(actors_df$JimBroadbent, "FALSE", "0")
+actors_df$JohnnyDepp = str_replace_all(actors_df$JohnnyDepp, "FALSE", "0")
+actors_df$JudyGreer = str_replace_all(actors_df$JudyGreer, "FALSE", "0")
+actors_df$JuliaRoberts = str_replace_all(actors_df$JuliaRoberts, "FALSE", "0")
+actors_df$KateWinslet = str_replace_all(actors_df$KateWinslet, "FALSE", "0")
+actors_df$KeanuReeves = str_replace_all(actors_df$KeanuReeves, "FALSE", "0")
+actors_df$KieranCulkin = str_replace_all(actors_df$KieranCulkin, "FALSE", "0")
+actors_df$KristinScottThomas = str_replace_all(actors_df$KristinScottThomas, "FALSE", "0")
+actors_df$LiamNeeson = str_replace_all(actors_df$LiamNeeson, "FALSE", "0")
+actors_df$MattDamon = str_replace_all(actors_df$MattDamon, "FALSE", "0")
+actors_df$MekhiPhifer = str_replace_all(actors_df$MekhiPhifer, "FALSE", "0")
+actors_df$MerylStreep = str_replace_all(actors_df$MerylStreep, "FALSE", "0")
+actors_df$MorganFreeman = str_replace_all(actors_df$MorganFreeman, "FALSE", "0")
+actors_df$OliverPlatt = str_replace_all(actors_df$OliverPlatt, "FALSE", "0")
+actors_df$PhilipSeymourHoffman = str_replace_all(actors_df$PhilipSeymourHoffman, "FALSE", "0")
+actors_df$RipTorn = str_replace_all(actors_df$RipTorn, "FALSE", "0")
+actors_df$RobertDowneyJr. = str_replace_all(actors_df$RobertDowneyJr., "FALSE", "0")
+actors_df$RobertDuvall = str_replace_all(actors_df$RobertDuvall, "FALSE", "0")
+actors_df$RosarioDawson = str_replace_all(actors_df$RosarioDawson, "FALSE", "0")
+actors_df$SteveBuscemi = str_replace_all(actors_df$SteveBuscemi, "FALSE", "0")
+actors_df$TomWilkinson = str_replace_all(actors_df$TomWilkinson, "FALSE", "0")
+actors_df$TonyGoldwyn = str_replace_all(actors_df$TonyGoldwyn, "FALSE", "0")
+actors_df$WilliamHurt = str_replace_all(actors_df$WilliamHurt, "FALSE", "0")
+actors_df$ZooeyDeschanel = str_replace_all(actors_df$ZooeyDeschanel, "FALSE", "0")
+```
+
+ 
+Сделаем наши нули и единицы не текстом, а числами
+```{r asnumeric}
+actors_df$AlfreWoodard = as.numeric(actors_df$AlfreWoodard)
+actors_df$AngelinaJoliePitt = as.numeric(actors_df$AngelinaJoliePitt)
+actors_df$AnjelicaHuston = as.numeric(actors_df$AnjelicaHuston)
+actors_df$BillCobbs = as.numeric(actors_df$BillCobbs)
+actors_df$BillMurray = as.numeric(actors_df$BillMurray)
+actors_df$BrendanFraser = as.numeric(actors_df$BrendanFraser)
+actors_df$BruceWillis = as.numeric(actors_df$BruceWillis)
+actors_df$ChristianBale = as.numeric(actors_df$ChristianBale)
+actors_df$ColinFirth = as.numeric(actors_df$ColinFirth)
+actors_df$DemiMoore = as.numeric(actors_df$DemiMoore)
+actors_df$DenzelWashington = as.numeric(actors_df$DenzelWashington)
+actors_df$DwayneJohnson = as.numeric(actors_df$DwayneJohnson)
+actors_df$GaryOldman = as.numeric(actors_df$GaryOldman)
+actors_df$JaneaneGarofalo = as.numeric(actors_df$JaneaneGarofalo)
+actors_df$JasonFlemyng = as.numeric(actors_df$JasonFlemyng)
+actors_df$JeffBridges = as.numeric(actors_df$JeffBridges)
+actors_df$JimBroadbent = as.numeric(actors_df$JimBroadbent)
+actors_df$JohnnyDepp = as.numeric(actors_df$JohnnyDepp)
+actors_df$JudyGreer = as.numeric(actors_df$JudyGreer)
+actors_df$JuliaRoberts = as.numeric(actors_df$JuliaRoberts)
+actors_df$KateWinslet = as.numeric(actors_df$KateWinslet)
+actors_df$KeanuReeves = as.numeric(actors_df$KeanuReeves)
+actors_df$KieranCulkin = as.numeric(actors_df$KieranCulkin)
+actors_df$KristinScottThomas = as.numeric(actors_df$KristinScottThomas)
+actors_df$LiamNeeson = as.numeric(actors_df$LiamNeeson)
+actors_df$MattDamon = as.numeric(actors_df$MattDamon)
+actors_df$MekhiPhifer = as.numeric(actors_df$MekhiPhifer)
+actors_df$MerylStreep = as.numeric(actors_df$MerylStreep)
+actors_df$MorganFreeman = as.numeric(actors_df$MorganFreeman)
+actors_df$OliverPlatt = as.numeric(actors_df$OliverPlatt)
+actors_df$PhilipSeymourHoffman = as.numeric(actors_df$PhilipSeymourHoffman)
+actors_df$RipTorn = as.numeric(actors_df$RipTorn)
+actors_df$RobertDowneyJr. = as.numeric(actors_df$RobertDowneyJr.)
+actors_df$RobertDuvall = as.numeric(actors_df$RobertDuvall)
+actors_df$RosarioDawson = as.numeric(actors_df$RosarioDawson)
+actors_df$SteveBuscemi = as.numeric(actors_df$SteveBuscemi)
+actors_df$TomWilkinson = as.numeric(actors_df$TomWilkinson)
+actors_df$TonyGoldwyn = as.numeric(actors_df$TonyGoldwyn)
+actors_df$WilliamHurt = as.numeric(actors_df$WilliamHurt)
+actors_df$ZooeyDeschanel = as.numeric(actors_df$ZooeyDeschanel)
+```
+ 
+Уберём от фильмов, в которых не участвовали совсем наши 40 актёров, которые играли в 3 и более фильмах датасета. 
+Переведём результат в матрицу, которую подадим на вход для построяния сеточки
+```{r}
+# посчитаем, сколько из 40 актёров есть в фильме
+actors_df = actors_df %>%
+  mutate(num = AlfreWoodard + AngelinaJoliePitt + AnjelicaHuston + ZooeyDeschanel + WilliamHurt + TonyGoldwyn + TomWilkinson + SteveBuscemi + RosarioDawson + RobertDuvall + RobertDowneyJr. + RipTorn + PhilipSeymourHoffman + BillCobbs + BillMurray + OliverPlatt + MorganFreeman + MerylStreep + MekhiPhifer + MattDamon + LiamNeeson + KristinScottThomas + KieranCulkin + KeanuReeves + KateWinslet + JuliaRoberts + JudyGreer + JohnnyDepp + JimBroadbent + JeffBridges + JasonFlemyng + JaneaneGarofalo + GaryOldman + BrendanFraser + BruceWillis + ChristianBale + ColinFirth + DemiMoore + DenzelWashington + DwayneJohnson)
+ 
+# присвоим названия строкам как id фильмов
+rownames(actors_df) <- str_c("id", actors_df$movie_id, sep = "_")
+ 
+# удалим фильмы без участия наших 40 актёров
+actors_df = actors_df %>% 
+  filter(actors_df$num > 0) %>% 
+  select(AlfreWoodard:ZooeyDeschanel)
+ 
+ 
+ 
+# построим матрицу, которую скормим чанку, которй нариует сеточку
+actors_matrix = actors_df %>% 
+  as.matrix()
+```
+ 
+ 
+Строим две сеточки - по фильмам и по актёрам
+```{r actors_nets}
+# строим граф
+g <- graph_from_incidence_matrix(actors_matrix)
+# строим проекцию
+pr = bipartite.projection(g)
+p_films <- pr[[1]]
+p_actors <- pr[[2]]
+# чтобы не сеточки цифр не было
+V(p_films)$label <- NA
+V(p_actors)$label <- NA
+# layout задали
+lt_films = layout.fruchterman.reingold(p_films)
+lt_actors = layout.fruchterman.reingold(p_actors)
+# строим сеточку по фильмам
+plot(p_films, vertex.size = 2, layout = lt_films)
+# строи сеточку по актёрам
+plot(p_actors, vertex.size = 2, layout = lt_actors)
+```
+
+Посмотрим на сеточки актёров из мета-данных, чтобы понять, стоит ли их включать в модель. По сеточкам видно, что по нашим ограниченным данным (не все актёры фильма указаны, а только топ3) не сформировались кластеры, но есть связи между фильмами через актёров и это может дать нам улучшение рекомендательной системы.
+
+На этом часть **exploratory data analyses** наших новых данных окончена, можно переходить к другим частям проекта!
+
+# Построение рекомендательной системы на основе оценок пользователей
+## Сontent-based подход
+
+Для составления нашей рекомендательной системы мы решили включить следующие переменные из найденного датасета: 
+### Актёры
+(actor_1_name, actor_2_name, actor_3_name): фильмы могут быть похожи теми актерами, которые в них снимались. Если пользователю понравился фильм, то возможно он хотел бы посмотреть на знакомых актёров и в других фильмах, поэтому можно включить это в рекомендательную систему.
+
+### Кинорежиссёр 
+(director_name): Пользователю, посмотревшему фильм определённого режиссёра, будут предлагаться другие его работы. Например, многим нравятся работы Квентина Тарантино, так как в них присутствует его собственный стиль и отличительные черты. Соответственно, нашему пользователю, после просмотра, будут предлагаться другие его картины для ознакомления. 
+
+### Возрастной рейтинг 
+(content_rating): Переменная позволяет понять, какие фильмы предпочитает пользователь. Если он смотрит фильмы с рейтингом 12+, то в списке рекомендаций ему будут предлагаться картины с аналогичным рейтингом, либо меньше. Возможно, пользователю ещё нет 18 лет и некоторые фильмы просто недоступны для него в силу возрастных ограничений, поэтому смотря мультфильмы, пользователю не должны рекомендоваться фильмы с материалами 18+. 
+
+### Рейтинг IMDB 
+(imdb_score): Рейтинг на сайте imdb позволяет рекомендовать фильмы с наиболее высокими показателями с целью ознакомить пользователя с более качественными картинами, прошедшими обзоры кинокритиков и других зрителей.
+
+А также из первоначального датасета возьмем переменные:
+### Жанры 
+(genres): Данная переменная является одной из важнейших для построения нашей системы. Очевидно, что пользователь, который предпочитает, к примеру, драмы или мультфильмы, вряд ли захочет видеть в списке рекомендуемых фильмов картины жанра хоррор. Переменная позволяет отсортировать только те жанры, которые интересны пользователю. 
+Страна производитель (country): Данная переменная включена в список по причине того, что некоторые пользователи предпочитают смотреть фильмы только из определённого региона. Американские и, например, французские фильмы достаточно сильно отличаются друг от друга. Если пользователь смотрит исключительно американские фильмы, то ему будут предлагаться картины из этого региона. 
+
+
 
 ```{r}
 movies_with_meta1 = movies_with_meta %>% dplyr::select(title.x, movie_id, genres.x, director_name, content_rating, actor_1_name, actor_2_name, actor_3_name, imdb_score, country)
@@ -50,7 +578,7 @@ movies_with_meta1 = movies_with_meta %>% dplyr::select(title.x, movie_id, genres
 ```{r}
 library(tidyr)
 source("~/shared/minor2_2018/2-tm-net/extract_json.R") 
-source("~/ma_projects/extract_smth.R") 
+source("~/shared/minor2_2018_23/extract_smth.R") 
 movies_with_meta1 = extract_json(df = movies_with_meta1, col = "genres.x")
 mov1 = movies_with_meta1 %>% dplyr::select(-title.x, -genres.x) %>% na.omit()
 mov2 = extract_smth(df = mov1, col = "content_rating")
@@ -77,46 +605,8 @@ sim = lsa::cosine(t(as.matrix(movi)))
 diag(sim) = 0
 ```
 
-
-## Рекомендация
-Например, возьмем пользователя 2413408. Он оценил несколько фильмов на 5.
-
-```{r}
-userId = 2413408
-user = ratings %>% filter(customer_id == userId & rating == 5)
-user$movie_id
-```
-
-```{r}
-movies_with_meta1 %>% 
-  filter(movie_id %in% c("607", "1073", "1905", "2152", "2913", "3860", "3938", "4306", "3825")) %>% 
-  select(title.x, director_name, country, imdb_score) %>% 
-  knitr::kable()
-```
-
-На основе этих фильмов мы порекомендуем ему наиболее похожие.
-
-```{r}
-mostSimilar = head(sort(sim[,as.character(user$movie_id)], decreasing = T), n = 10)
-a = which(sim[,as.character(user$movie_id)] == mostSimilar, arr.ind = TRUE)
-a
-```
-
-Коэффициенты схожести:
-```{r}
-mostSimilar
-```
-
-Рекомендуемые фильмы:
-```{r}
-a = which(sim[,as.character(user$movie_id)] %in% mostSimilar, arr.ind = TRUE)
-rows = a %% dim(sim)[1] 
-result = rownames(sim)[rows]
-filter(movies_with_meta1, movie_id %in% result) %>% dplyr::select(title.x, movie_id, director_name, country, imdb_score) %>% knitr::kable()
-```
-
-
 Теперь напишем рекомендательную систему в виде функции с аргументами userId и количество фильмов в результате.
+
 ```{r}
 recFilms_n = function(userId, num){
   user = ratings %>% filter(customer_id == userId & rating == 5)
@@ -134,10 +624,130 @@ recFilms_n = function(userId, num){
   recommend
 }
 
-recFilms_n(2413408, 10)
+```
+
+А теперь усовершенствуем ее с учетом появления пользователей, не ставивших высший балл фильмам.
+
+Посмотрим на самые популярные и высоко оценённые фильмы. Их будем рекомендовать при холодном старте или при отсутсвии положительных оценок.
+
+```{r}
+pop_movie = movies_with_meta %>% 
+select(title.x, movie_id, popularity, imdb_score, title_year) %>% 
+filter(title_year > 2000) %>% 
+filter(popularity > 23) %>% 
+filter(imdb_score > 7) %>% 
+arrange(-imdb_score)
+
+pop_movie_vector_id = pop_movie$movie_id
+```
+
+```{r}
+
+recFilms_n_2 = function(userId, num){
+# составим два вектора, где есть оценки пользователя только на 5, и там, где оценка нк 4 или 5
+user5 = ratings %>% filter(customer_id == userId) %>% filter(rating == 5)
+user45 = ratings %>% filter(customer_id == userId) %>% filter(rating == 5)
+
+# будем рекомендовать самые популярные фильмы тем, у кого нет оценок 4, 5 или для пользователей, у по которым нет данных
+pop_movie = movies_with_meta %>% 
+select(title.x, movie_id, popularity, imdb_score, title_year) %>% 
+filter(title_year > 2000) %>% 
+filter(popularity > 23) %>% 
+filter(imdb_score > 7) %>% 
+arrange(-imdb_score) %>% 
+head(n = num)
+pop_movie_vector_id = pop_movie$movie_id
+
+# для новых пользователей или тех, у кого нет даже 5 оценок на 4/5 баллов, рекомендуем популярные фильмы
+# для тех, у кого есть 5 и более фильмов, оцененных на 5 баллов - рекмендуем на основе этих фильмов
+# для тех, у кого есть 5 и более фильмов, оцененных на 5 или 4 баллов - рекмендуем на основе этих фильмов
+if (length(user45)<4) {
+# рекомендуем популярные фильмы
+result = pop_movie_vector_id
+recommend = filter(movies_with_meta1, movie_id %in% result) %>% dplyr::select(title.x, movie_id, director_name, country, imdb_score) %>% knitr::kable()
+} 
+
+else {
+
+if (length(user5)>4) {
+# рекомендуем исходя из 5 или более фильвом, оценённых на 5 баллов
+mostSimilar = head(sort(sim[,as.character(user5$movie_id)], decreasing = T), n = num)
+a = which(sim[,as.character(user5$movie_id)] %in% mostSimilar, arr.ind = TRUE)
+rows = a %% dim(sim)[1]
+result = rownames(sim)[rows]
+recommend = filter(movies_with_meta1, movie_id %in% result) %>% dplyr::select(title.x, movie_id, director_name, country, imdb_score) %>% knitr::kable()
+}
+else {
+# рекомендуем исходя из 5 или более фильвом, оценённых на 4 иил 5 баллов
+mostSimilar = head(sort(sim[,as.character(user45$movie_id)], decreasing = T), n = num)
+a = which(sim[,as.character(user45$movie_id)] %in% mostSimilar, arr.ind = TRUE)
+rows = a %% dim(sim)[1]
+result = rownames(sim)[rows]
+recommend = filter(movies_with_meta1, movie_id %in% result) %>% dplyr::select(title.x, movie_id, director_name, country, imdb_score) %>% knitr::kable()
+}
+}
+
+recommend
+}
+
 
 ```
-### Collaborative filtering
+
+### Рекомендация
+Например, возьмем пользователя 2413408. Он оценил несколько фильмов на 5.
+
+```{r}
+userId = 2413408
+user = ratings %>% filter(customer_id == userId & rating == 5)
+
+
+movies_with_meta1 %>% 
+  filter(movie_id %in% user$movie_id) %>% 
+  select(title.x, director_name, country, imdb_score) %>% 
+  knitr::kable()
+```
+
+На основе этих фильмов мы порекомендуем ему наиболее похожие.
+
+```{r}
+recFilms_n_2(2413408, 10)
+```
+
+Попробуем протестировать для пользователя, оценившего фильмы не только снятых в США.
+```{r}
+UKfilms = movies_with_meta1 %>% 
+  filter(country == "UK") %>% 
+  select(movie_id)
+
+ukf = inner_join(UKfilms, ratings)
+
+ukf %>% 
+  group_by(customer_id) %>% 
+  summarise(n = n()) %>% 
+  arrange(desc(n)) %>% 
+  head()
+
+userId2 = 1354798  
+user2 = ratings %>% filter(customer_id == userId2 & rating == 5)
+
+movies_with_meta1 %>% 
+  filter(movie_id %in% user2$movie_id) %>% 
+  select(title.x, director_name, country, imdb_score) %>% 
+  tail() %>% 
+  knitr::kable()
+```
+
+
+На основе этих фильмов мы порекомендуем ему наиболее похожие.
+
+```{r}
+recFilms_n_2(1354798, 5)
+```
+
+
+## Метод коллаборативной фильтрации
+ 
+
 
 ```{r message=FALSE, warning=FALSE}
 library(devtools)
@@ -151,7 +761,10 @@ ratings_full = inner_join(movies, ratings, by = "movie_id")
 ```
  
  
-В первую очередь построим рекоммендательную систему на основе оценки фильмов пользователями, то есть по модели IBCF ("Recommender based on item-based collaborative filtering (real data)")
+Данная рекоммендательная система будет построена на основе оценок пользователей, то есть по модели UBCF ("Recommender based on user-based collaborative filtering")
+ Оценки, выставленные конкретным пользователем, представляют собой вектор в M-мерном пространстве. Чтобы оценить схожесть пользователей, мы рассмотрим  косинусную меру векторов. Косинусная мера для двух векторов — это косинус угла между ними
+
+### Подготовка данных 
  
 ```{r}
 rates = select(ratings_full, customer_id, movie_id, rating)
@@ -175,41 +788,8 @@ r = as(rates, "realRatingMatrix")
 r
 ```
  
-### Меры схожести
- 
-Оценки, выставленные отдельно взятым пользователем, представляют собой вектор в M-мерном пространстве фильмов, а сравнивать вектора мы умеем. Среди возможных мер можно выделить следующие:
- 
-*Косинусная мера
-*Коэффициент корреляции Пирсона
-*Евклидово расстояние
-*Коэффициент Танимото
-*Манхэттенское расстояние и т.д.
- 
-Пока же достаточно сказать, что в рекомендательных системах наиболее часто используются:
- 
-* Коэффициент Пирсона;
-* Косинусное расстояние;
-* Евклидово расстояние.
- 
-Рассмотрим более подробно косинусную меру, которую мы и собираемся реализовать. Косинусная мера для двух векторов — это косинус угла между ними.
- 
- 
-```{r}
-similarity_users10 <- similarity(r[1:10, ], method = "cosine", which = "user")
-as.matrix(similarity_users10)
-```
- 
-Проиллюстрируем полученные результаты
- 
-```{r}
-image(as.matrix(similarity_users10), main = "User similarity")
-```
- 
-### Метод коллаборативной фильтрации
- 
-####Подготовка данных
- 
-Для начала подготовим данные к работе, а именно уберем несоответствующие 
+
+Теперь уберем несоответствующие данные. 
  
 ```{r}
 ggplot(data = data.frame(filmRate=colCounts(r))) + geom_histogram(aes(x=filmRate), fill = "#87b1b6") +
@@ -261,10 +841,10 @@ recc_data_train <- ratings_movies[-test_ind, ]
 recc_data_test <- ratings_movies[test_ind, ]
 ```
  
-##Построим рекомендательную модель
+### Построим рекомендательную модель
  
 ```{r}
-recc_model <- Recommender(data = recc_data_train, method = "IBCF", parameter = list(k = 30))
+recc_model <- Recommender(data = recc_data_train, method = "UBCF", parameter = list(k = 30))
 recc_model
 ```
  Построим матрицу схожести с помощью метода getModel() для более детального понимания модели
@@ -275,7 +855,7 @@ model_details$description
 model_details$sim[1:10, 1:10]
 ```
  
-#### Составим рекомендации
+### Составим рекомендации
  
 ```{r}
 recc_predicted <- predict(object = recc_model, newdata = recc_data_test, n = 6)
@@ -283,12 +863,7 @@ recc_predicted
 ```
  
 Результат:
- 
-```{r}
-str(recc_predicted)
-```
- 
- 
+
 ```{r}
 recc_user_1 <- recc_predicted@items[[1]]
 recc_user_1
@@ -300,10 +875,78 @@ names_movies_user_1 <- ratings_full$title[match(movies_user_1, ratings_full$movi
 names_movies_user_1
 ```
  
-Посмотрим на предсказанные рейтинги для отдельно взятого пользователя (id=2):
+### Посмотрим на предсказанные рейтинги для отдельно взятого пользователя (id=1):
  
 ```{r}
-recc_predicted@ratings[[2]]
+ratings_user = recc_predicted@ratings[[1]]
+dff = data.frame(names_movies_user_1, ratings_user)
+dff %>% knitr::kable()
 ```
  
-   Так, мы можем понять, что данный пользователь скорее всего заинтересуется в просмотре данных фильмов, так как предсказанные рейтинги достаточно высокие, поэтому мы можем точно ему рекомендовать эти фильмы к просмотру. 
+ 
+```{r}
+filmRec_n = function(userId, num){
+  
+  recc_predicted <- predict(object = recc_model, newdata = recc_data_test, n = num)
+  recc_user_1 <- recc_predicted@items[[userId]]
+  movies_user_1 <- recc_predicted@itemLabels[recc_user_1]
+  names_movies_user_1 <- ratings_full$title[match(movies_user_1, ratings_full$movie_id)]
+  ratings_user = recc_predicted@ratings[[userId]]
+  dff = data.frame(names_movies_user_1, ratings_user)
+  dff %>% knitr::kable()
+}
+
+filmRec_n(1, 5)  
+```
+
+   Так мы можем понять, что данный пользователь скорее всего заинтересуется в просмотре данных фильмов, так как предсказанные рейтинги достаточно высокие, поэтому мы можем точно ему рекомендовать эти фильмы к просмотру. 
+
+## Качество модели 
+   
+Строим модель и предсказание. До этого мы делили на тестовую и обучающую выборки сами. Пакет `recommenderlab` предлагает нам "схемы", которые сделают то же самое. 
+При этом мы можем указать, какие оценки нас устраивают, т.е. в каком случае мы действительно хотим рекомендовать что-то пользователю. Рассмотрим вариант, когда подходят 4 и 5 (параметр goodRating). 
+Параметр given показывает, сколько оценок пользователя мы будем использовать для сравнения (т.е. у всех пользователей должно быть не меньше given оцененных фильмов -- нам нужны реальные оценки). Строим модель на обучающей, предсказываем на тестовой.
+ 
+```{r}
+set.seed(100)
+eval_sets <- evaluationScheme(data = ratings_movies, 
+                              method = "split",
+                              train = 0.8, # доля обучающей выборки
+                              given = 7, # сколько оценок используется для  предсказания
+                              goodRating = 4) # если предсказанная оценка < 4, то фильм не рекомендуется
+recc_model <- Recommender(data = getData(eval_sets, "train"), method = "UBCF")
+recc_predicted <- predict(object = recc_model, newdata = getData(eval_sets, "known"), n = 7, type = "ratings")
+```
+ 
+Мы сделали предсказание, давайте посмотрим на его качество. Качество = отклонение предсказания от реальности. 
+ 
+```{r}
+eval_accuracy <- calcPredictionAccuracy(x = recc_predicted,
+                                         # predicted values
+                                         data = getData(eval_sets, "unknown"),
+                                         byUser = F) # not averaging for each user
+eval_accuracy
+ 
+```
+
+По данным оценкам можно понять размер ошибки, чем они меньше - тем меньше ошибка. Для лушего понимания, проведем новое предсказание, но, используя алгоритм IBCF.
+
+ 
+```{r}
+recc_model2 <- Recommender(data = getData(eval_sets, "train"), method = "IBCF")
+recc_predicted2 <- predict(object = recc_model2, newdata = getData(eval_sets, "known"), n = 6, type = "ratings")
+```
+ 
+Теперь проверим качество предсказания с помощью тех же  показателей (RMSE,MSE,MAE)
+ 
+```{r}
+eval_accuracy2 <- calcPredictionAccuracy(x = recc_predicted2,
+                                         # predicted values
+                                         data = getData(eval_sets, "unknown"),
+                                         byUser = F) # not averaging for each user
+eval_accuracy2
+```
+Мы видим, что с помощью  метода UBCF мы получаем более точное предсказание, из чего следует, что наша рекомендательная более эффективна.
+
+
+
